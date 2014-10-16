@@ -1,0 +1,86 @@
+#define GLOBAL_INSTANCE 
+#include "global.h"
+
+void RCC_Configuration(void);
+void RCC_Configuration1(void);
+void GPIO_Configuraion(void);
+void TIM1_Configuration(void);  
+void vTask1(void *pvParameters);
+void vTask2(void *pvParameters);
+
+uint8_t cnt=0;
+uint8_t TestData[20]="test\n\r";
+
+void main (void){
+
+    /* クロックの設定 */
+    SystemInit();
+
+    /*********使用機能一覧**********/
+    //UART1           PCとの通信用
+    //DCモータ        エレベータ、ローラーの2個
+    //デバッグLED     表示用3個分
+    //超音波センサ    かご検出用1個
+    //サーボモータ    捕獲用2個、シューター用2個
+
+
+    //UART1の初期設定
+    vUart1_Init();
+
+    //モータの初期設定
+    //vDcMotor_Init();
+
+    //デバッグLEDの初期設定
+    vDebug_Init();
+
+
+    /*タスク生成*/
+    xTaskCreate( vTask1, "Task1", 100, NULL, 1, NULL);
+    xTaskCreate( vTask2, "Task2", 100, NULL, 1, NULL);
+
+    /*スケジューリング開始*/
+    vTaskStartScheduler();
+
+
+    while(1){
+         
+    }
+  
+}
+
+/* Task1 ---------------------------------------------------------*/
+void vTask1(void *pvParameters)
+{
+  
+  while(1) {  
+      
+      LED1 = (~LED1)&0x01;
+      LED2 = (~LED2)&0x01;
+      LED3 = (~LED3)&0x01;
+    
+      vTaskDelay(100000);
+      
+  }
+}
+
+/* Task2 ---------------------------------------------------------*/
+void vTask2(void *pvParameters){
+    while(1){ 
+        //itoa(TIM3->CNT,TIM2->CNT);
+        //itoa(CNT);
+
+        //cTxdata[0]=1+48;
+        //cCount = strlen((char*)cTxdata);
+        //vUSART1_Send_String(cTxdata ,(uint8_t)cCount);
+
+        //if(cnt==0)
+        //KServo_Ping(0xe0);
+
+        //cnt=1;  
+
+        xQueueSendToBack(Uart1toPC_Queue, TestData, portMAX_DELAY);
+          
+        vTaskDelay(1000);
+    }
+  
+}
