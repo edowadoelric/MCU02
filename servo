@@ -1,0 +1,254 @@
+#include "global.h"
+
+/*----function define---------------------------------------------------------*/
+//void vKServo_Init(void);
+void vUSART2_Send_String(uint8_t String[],uint8_t length);
+void vDMA2_Configuration(uint32_t Memory_Address,uint8_t Buffer_Size);
+void KServo_Ping(uint8_t ID_number);
+
+/*----Queue Handle------------------------------------------------------------*/
+//xQueueHandle Uart2toAx12_Queue;
+
+/*----Task--------------------------------------------------------------------*/
+//void vUart1_WriteToParamTask(void *pvParameters);
+void vPingTask(void *pvParameters);
+void vReadDegree(void *pvParameters);
+
+/*----private variables-------------------------------------------------------*/
+uint8_t ServoTxData[50]={'\0'};		//受信バッファ
+uint8_t ServoRxData[80]={'\0'};		//受信バッファ
+uint8_t ServoRxcount=0;			//受信カウント
+uint8_t ReceiveLength=0;
+uint32_t i=0;
+
+
+/*--------USART2設定関数------------------------------------------------------*/
+void vKServo_Init(void){
+    
+    NVIC_InitTypeDef NVIC_InitStructure;
+    GPIO_InitTypeDef GPIO_InitStructure;
+    USART_InitTypeDef USART_InitStructure;
+    
+    /* Enable USART2, clocks*/
+    RCC_APB1PeriphClockCmd(RCC_APB1Periph_USART2, ENABLE);
+    
+    /* Enable GPIOA clock */
+    RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA, ENABLE );	
+    
+    /* Enable DMA clocks */
+    RCC_AHBPeriphClockCmd(RCC_AHBPeriph_DMA1, ENABLE);
+    
+    /* Enable USART2 IRQ Channel */
+    NVIC_InitStructure.NVIC_IRQChannel = USART2_IRQn;
+    NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 1;
+    NVIC_InitStructure.NVIC_IRQChannelSubPriority = 0;
+    NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
+    NVIC_Init(&NVIC_InitStructure);
+    
+    /* Enable DMA1_Channel7 IRQ Channel */
+    NVIC_InitStructure.NVIC_IRQChannel = DMA1_Channel7_IRQn;
+    NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 2;
+    NVIC_InitStructure.NVIC_IRQChannelSubPriority = 0;
+    NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
+    NVIC_Init(&NVIC_InitStructure);
+    
+    /* Configure GPIO (PA11=Tx gate, PA12=Rx gate)*/
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_11 | GPIO_Pin_12;
+    GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
+    GPIO_Init(GPIOA, &GPIO_InitStructure);
+    
+    /* Configure USART2 Tx as alternate function push-pull */
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_2;
+    GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF_PP;
+    GPIO_Init(GPIOA, &GPIO_InitStructure);
+    
+    
+    GPIO_ResetBits(GPIOA, GPIO_Pin_2);
+    GPIO_SetBits(GPIOA, GPIO_Pin_11);
+    while(i<5000000)i++;
+    GPIO_SetBits(GPIOA, GPIO_Pin_2);
+    GPIO_ResetBits(GPIOA, GPIO_Pin_11);
+    
+    
+    /* Configure USART2 Rx as input floating */
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_3;
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IN_FLOATING;
+    GPIO_Init(GPIOA, &GPIO_InitStructure);
+    
+    //UART2 Setup
+    USART_InitStructure.USART_BaudRate = 115200;
+    USART_InitStructure.USART_WordLength = USART_WordLength_8b;
+    USART_InitStructure.USART_StopBits = USART_StopBits_1;
+    USART_InitStructure.USART_Parity = USART_Parity_Even ;
+    USART_InitStructure.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
+    USART_InitStructure.USART_Mode = USART_Mode_Rx | USART_Mode_Tx;
+    USART_Init(USART2, &USART_InitStructure);
+    
+    /* Enable USART2 DMA TX request */
+    USART_DMACmd(USART2, USART_DMAReq_Tx, ENABLE);
+    
+    /* Enable USART2 interrupt */
+    USART_ITConfig(USART2, USART_IT_RXNE, ENABLE);
+    
+    /* Enable the USART2 */
+    USART_Cmd(USART2, ENABLE);
+    
+    /*Clear USART2 RX interrupt flag*/
+    USART_ClearITPendingBit(USART2, USART_IT_RXNE);
+    
+    /*タスク生成*/
+    //debug ping確認
+    //xTaskCreate( vPingTask, "vPingTask", 100, NULL, 1, NULL);
+    //xTaskCreate( vReadDegree, "vReadDegree", 100, NULL, 1, NULL);
+}  
+	
+/* UART1のDMAを使用したメッセージ送付-----------------------------------------*/
+void vUSART2_Send_String(uint8_t String[],uint8_t length){
+    
+    //3ステートバッファをデータ送信側にスイッチ
+    GPIO_SetBits(GPIOA, GPIO_Pin_11);
+    GPIO_ResetBits(GPIOA, GPIO_Pin_12);
+    
+    //送信データのセット
+    vDMA2_Configuration((uint32_t)String, length);
+    
+    //UART2-DMA転送完了割り込みを有効にする
+    DMA_ITConfig(DMA1_Channel7,DMA_IT_TC,ENABLE);
+    
+    //DMAの起動
+    DMA_Cmd(DMA1_Channel7, ENABLE);
+
+}
+
+/*------DMAで文字転送をするので、初期設定とは独立して宣言させている-----------*/
+void vDMA2_Configuration(uint32_t Memory_Address, uint8_t Buffer_Size){
+    
+    DMA_InitTypeDef DMA_InitStructure;
+
+    /* DMA channel for USART2 (DMA1_Channel7) Config */
+    DMA_DeInit(DMA1_Channel7);
+    DMA_InitStructure.DMA_PeripheralBaseAddr = (uint32_t)&USART2->DR;
+    DMA_InitStructure.DMA_MemoryBaseAddr = (uint32_t)Memory_Address;
+    DMA_InitStructure.DMA_DIR = DMA_DIR_PeripheralDST;
+    DMA_InitStructure.DMA_BufferSize = Buffer_Size;
+    DMA_InitStructure.DMA_PeripheralInc = DMA_PeripheralInc_Disable;
+    DMA_InitStructure.DMA_MemoryInc = DMA_MemoryInc_Enable;
+    DMA_InitStructure.DMA_PeripheralDataSize = DMA_PeripheralDataSize_Byte;
+    DMA_InitStructure.DMA_MemoryDataSize = DMA_MemoryDataSize_Byte;
+    DMA_InitStructure.DMA_Mode = DMA_Mode_Normal;
+    DMA_InitStructure.DMA_Priority = DMA_Priority_VeryHigh;
+    DMA_InitStructure.DMA_M2M = DMA_M2M_Disable;
+    DMA_Init(DMA1_Channel7, &DMA_InitStructure);
+}
+
+
+/* DMA_Channel7送信完了割り込み-----------------------------------------------*/
+void DMA1_Channel7_IRQHandler(void){
+    
+    //データの転送が終了したらTx割り込みを有効にする
+    if(DMA_GetFlagStatus(DMA1_FLAG_TC7) != RESET){      
+        USART_ITConfig(USART2, USART_IT_TC, ENABLE);
+        USART_ClearITPendingBit(USART2, USART_IT_TC);
+    }
+   
+    DMA_ClearITPendingBit(DMA1_IT_TC7);
+}
+
+/* ----USART2割り込み-----------------------------------------------------*/
+void USART2_IRQHandler(void){
+    portBASE_TYPE xHigherPriorityTaskWoken = pdFALSE;
+
+    /*受信割り込み*/
+    if(USART_GetFlagStatus(USART2, USART_FLAG_RXNE) == SET){
+              
+        USART_ClearITPendingBit(USART2, USART_IT_RXNE);
+        ServoRxData[ServoRxcount]=USART_ReceiveData(USART2);
+        
+        ServoRxcount++; 
+        
+        //Servoの受信完了処理
+        if(ServoRxcount>=ReceiveLength){
+            GPIO_ResetBits(GPIOA, GPIO_Pin_12);
+            
+            ServoRxcount=0;
+                        
+        }
+        
+    }
+        
+    /*送信完了割り込み*/
+    if(USART_GetFlagStatus(USART2, USART_FLAG_TC) == SET){
+
+        //送信が終わったら受信用にスイッチを切り替え
+        GPIO_ResetBits(GPIOA, GPIO_Pin_11);
+        GPIO_SetBits(GPIOA, GPIO_Pin_12);
+        
+        //USART_ClearITPendingBit(USART2, USART_IT_TC);
+        USART_ITConfig(USART2, USART_IT_TC, DISABLE);
+
+    }
+     
+    portEND_SWITCHING_ISR( xHigherPriorityTaskWoken );
+  
+}
+
+//サーボモータのタスク
+//受信したデータを元に対応するサーボモータを指定位置まで回転させる
+void vKServo_Task(void *pvParameters){
+    
+    while(1){
+        
+    }
+    
+}
+
+/*ここから関数----------------------------------------------------------------*/
+
+/* ID_ping--------------------------------------------------------------------*/
+void KServo_Ping(uint8_t ID_number){
+
+    ReceiveLength=1;
+
+    ServoTxData[0]=0xFF;
+    ServoTxData[1]=0x00;
+    ServoTxData[2]=0x00;                     
+    ServoTxData[3]=0x00;                                       
+
+    vUSART2_Send_String(ServoTxData,4);  
+
+    /*
+    if(ServoRxData[0]==ID_number){
+      xQueueSendToBack(Uart1toPC_Queue, "Connected!\n\r", portMAX_DELAY);
+    }
+    else{
+      xQueueSendToBack(Uart1toPC_Queue, "Error!\n\r", portMAX_DELAY);
+    } 
+    */
+}
+
+void KServo_Move_Position(uint8_t ID_number, uint16_t angle){
+   
+    ReceiveLength=3;
+    
+    ServoTxData[0]=0xE0+ID_number;      //コマンド0b111xxxxxとIDを足す
+    ServoTxData[1]=(angle&0x3F80)>>7;   //POS_Hの抽出
+    ServoTxData[2]=angle&0x007F;        //POS_Lの抽出
+    
+    vUSART2_Send_String(ServoTxData,3);  
+}
+
+void KServo_Change_ID(uint8_t ID_number){
+    
+    ReceiveLength=1;
+    
+    ServoTxData[0]=0xE0+ID_number;
+    ServoTxData[1]=0x01;
+    ServoTxData[2]=0x01;
+    ServoTxData[3]=0x01;
+    
+    vUSART2_Send_String(ServoTxData,3);
+}
+    
+    
