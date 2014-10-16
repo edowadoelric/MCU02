@@ -1,0 +1,168 @@
+#include "global.h"
+
+/*----function define---------------------------------------------------------*/
+//void vUltraSonic_Init(void);
+
+/*----Task--------------------------------------------------------------------*/
+void vUltraSonic_Get(void *pvParameters);
+
+/*----private variables-------------------------------------------------------*/
+uint16_t Distance = 0;
+uint16_t Distance_Counter = 0;
+FlagStatus MeasurementDistanceFlag = RESET; 
+uint8_t US_TxData[20]={0};
+
+/*-------- uart1設定関数----------------------------------------------------*/
+void vUltraSonic_Init(void)
+{
+  NVIC_InitTypeDef NVIC_InitStructure;
+  GPIO_InitTypeDef GPIO_InitStructure;
+  EXTI_InitTypeDef EXTI_InitStructure;
+  TIM_TimeBaseInitTypeDef  TIM_TimeBaseStructure;
+  
+  /* Enable Button GPIO clock */
+  RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA 
+                       | RCC_APB2Periph_AFIO 
+                       | RCC_APB2Periph_TIM1, ENABLE);
+
+  /* Configure pin as Echo input */
+  GPIO_InitStructure.GPIO_Pin = GPIO_Pin_0;
+  GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IN_FLOATING;
+  GPIO_Init(GPIOA, &GPIO_InitStructure);
+  
+  /* Configure pin as Trig output */
+  GPIO_InitStructure.GPIO_Pin = GPIO_Pin_1 | GPIO_Pin_2;
+  GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+  GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
+  GPIO_Init(GPIOA, &GPIO_InitStructure);
+  
+  /*Select EXTI-GPIO pin*/
+  GPIO_EXTILineConfig(GPIO_PortSourceGPIOA , GPIO_PinSource0);
+
+  /*Configure EXIT */
+  EXTI_InitStructure.EXTI_Line = EXTI_Line0;
+  EXTI_InitStructure.EXTI_Mode = EXTI_Mode_Interrupt;
+  EXTI_InitStructure.EXTI_Trigger = EXTI_Trigger_Rising_Falling;
+  EXTI_InitStructure.EXTI_LineCmd = ENABLE;
+  EXTI_Init(&EXTI_InitStructure);
+
+  /* Enable USART1 IRQ Channel */
+  NVIC_InitStructure.NVIC_IRQChannel = EXTI0_IRQn;
+  NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = configLIBRARY_KERNEL_INTERRUPT_PRIORITY;
+  NVIC_InitStructure.NVIC_IRQChannelSubPriority = 0x01;
+  NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
+  NVIC_Init(&NVIC_InitStructure);
+  
+  /* Enable TIM1 IRQ Channel */
+  NVIC_InitStructure.NVIC_IRQChannel = TIM1_UP_IRQn;
+  NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = configLIBRARY_KERNEL_INTERRUPT_PRIORITY;
+  NVIC_InitStructure.NVIC_IRQChannelSubPriority = 0x02;
+  NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
+  NVIC_Init(&NVIC_InitStructure);
+  
+    //TIM1はDCモータをやんわりと加速するためにつかう
+  /* ---------------------------------------------------------------------------
+    TIM1 Configuration: Output Compare Toggle Mode:
+    TIM1CLK = 72 MHz, Prescaler = 100 → 7200kHz, TIM1 counter clock = 100kHz
+  ----------------------------------------------------------------------------*/
+  /* Time base configuration */
+  TIM_TimeBaseStructure.TIM_Period = 72-1;
+  TIM_TimeBaseStructure.TIM_Prescaler = 10-1;
+  TIM_TimeBaseStructure.TIM_ClockDivision = 0;
+  TIM_TimeBaseStructure.TIM_CounterMode = TIM_CounterMode_Up;
+  TIM_TimeBaseStructure.TIM_RepetitionCounter = 0;
+  TIM_TimeBaseInit(TIM1, &TIM_TimeBaseStructure);
+  TIM_Cmd(TIM1, ENABLE);
+  
+  /*タスク生成*/
+  xTaskCreate( vUltraSonic_Get, "US_task1", 128, NULL, 1, NULL);
+
+}  
+
+/* 超音波センサにトリガを送る-------------------------------------------------*/
+void vUltraSonic_Get(void *pvParameters)
+{
+  //とりあえずリセット
+  GPIO_ResetBits(GPIOA, GPIO_Pin_1);
+  
+  while(1) {
+   
+    /* 超音波センサにインパルストリガを送信する */
+    GPIO_SetBits(GPIOA, GPIO_Pin_1);
+    
+    vTaskDelay(1);
+    
+    GPIO_ResetBits(GPIOA, GPIO_Pin_1);
+    
+    vTaskDelay(2000);
+  }
+}
+
+/* EXTI0_Interupt-------------------------------------------------------------*/
+void EXTI0_IRQHandler(void)
+{
+  
+  /* Memo ----------------------------------------------------------------------
+  Raising Fallingの切り分けはおそらくGPIO読み取りが必要 
+  ----------------------------------------------------------------------------*/
+  
+  //立ち上がり割り込み
+  if(GPIO_ReadInputDataBit(GPIOA,GPIO_Pin_0) == 1){
+    
+    //距離計測用カウンタをリセット
+    Distance_Counter = 0;
+    MeasurementDistanceFlag = SET;
+    
+    //TIM1割り込みを有効にする
+    TIM_ITConfig(TIM1,TIM_IT_Update,ENABLE);
+  }
+  
+  //立ち下がり割り込み
+  else{
+    
+    if(MeasurementDistanceFlag){
+      
+      //TIM1割り込みを無効にする
+      TIM_ITConfig(TIM1,TIM_IT_Update,DISABLE);
+    
+      //距離のパラメータにカウンタの値を代入する
+      Distance = Distance_Counter;
+      
+      MeasurementDistanceFlag = RESET;
+      
+    }
+    else{}
+  }
+
+  /* Clear the Key Button EXTI line pending bit */
+  EXTI_ClearITPendingBit(EXTI_Line0);
+  
+}
+
+/* TIM1_Interupt--------------------------------------------------------------*/
+void TIM1_UP_IRQHandler(void)
+{ 
+  //カウンターのカウントアップ
+  Distance_Counter++;
+  
+  //計測時間が15msecに到達したら
+  if(Distance_Counter == 1500){
+    
+    if(MeasurementDistanceFlag){
+      //TIM1割り込みを無効にする
+      TIM_ITConfig(TIM1,TIM_IT_Update,DISABLE);
+    
+      //距離のパラメータにカウンタの値を代入する
+      Distance = Distance_Counter;
+      
+      MeasurementDistanceFlag = RESET;
+    }
+    else{}
+
+  }
+  else{}
+  
+  TIM_ClearITPendingBit(TIM1, TIM_IT_Update);
+
+  
+}
