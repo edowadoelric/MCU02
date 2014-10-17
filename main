@@ -28,7 +28,7 @@ void main (void){
     vUart1_Init();
 
     //モータの初期設定
-    //vDcMotor_Init();
+    vDcMotor_Init();
 
     //デバッグLEDの初期設定
     vDebug_Init();
