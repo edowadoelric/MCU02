@@ -5,12 +5,19 @@ void vDebug_Task(void *pvParameters);
 
 void vDebug_Init(void){
     GPIO_InitTypeDef GPIO_InitStructure;
+	
+	RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOB, ENABLE);
   
     GPIO_InitStructure.GPIO_Pin = GPIO_Pin_12 | GPIO_Pin_13 | GPIO_Pin_14;
     GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
     GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
     GPIO_Init(GPIOB, &GPIO_InitStructure);
     
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_4 | GPIO_Pin_5 | GPIO_Pin_10 | GPIO_Pin_11;
+    GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IN_FLOATING;
+    GPIO_Init(GPIOB, &GPIO_InitStructure);
+	
     //タスク生成
     xTaskCreate( vDebug_Task, "Debug_Task1", 200, NULL, 1, NULL);
 }
@@ -18,17 +25,17 @@ void vDebug_Init(void){
 void vDebug_Task(void *pvParameters){
     
     while(1){
-        if(LED1)        
+        if(GPIO_ReadInputDataBit(GPIOB, GPIO_Pin_4))        
             GPIO_SetBits(GPIOB, GPIO_Pin_12);
         else
             GPIO_ResetBits(GPIOB, GPIO_Pin_12);
         
-        if(LED2)        
+        if(GPIO_ReadInputDataBit(GPIOB, GPIO_Pin_5))        
             GPIO_SetBits(GPIOB, GPIO_Pin_13);
         else
             GPIO_ResetBits(GPIOB, GPIO_Pin_13);
         
-        if(LED3)        
+        if(GPIO_ReadInputDataBit(GPIOB, GPIO_Pin_11))        
             GPIO_SetBits(GPIOB, GPIO_Pin_14);
         else
             GPIO_ResetBits(GPIOB, GPIO_Pin_14);
